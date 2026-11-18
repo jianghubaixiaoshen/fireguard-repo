@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>4G 火焰报警装置 · 现场看板</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #FAF6EF; color: #1F1B16; font-family: "PingFang SC","Microsoft YaHei",sans-serif; padding: 28px 36px; }
+  h1 { font-size: 26px; letter-spacing: 1px; }
+  .sub { color: #8A7D63; font-size: 14px; margin: 6px 0 24px 0; }
+  .sub b { color: #B03427; }
+  .grid { display: grid; grid-template-columns: 340px 1fr 300px; gap: 22px; }
+  .card { background: #fff; border: 1px solid #E5DCC8; border-radius: 10px; padding: 20px 22px; }
+  .card h2 { font-size: 15px; color: #8A7D63; font-weight: normal; margin-bottom: 14px; }
+  .fire-box { text-align: center; padding: 26px 0 22px; }
+  .fire-dot { width: 92px; height: 92px; border-radius: 50%; margin: 0 auto 16px;
+              background: #E8E1D2; transition: all .3s; }
+  .fire-dot.on { background: #C0392B; box-shadow: 0 0 0 12px #FBEAE8, 0 0 40px #C0392B88; }
+  .fire-txt { font-size: 24px; font-weight: bold; }
+  .fire-txt small { display:block; font-size: 13px; color: #8A7D63; font-weight: normal; margin-top: 6px; }
+  .kv { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px dashed #EDE6D6; font-size: 15px; }
+  .kv:last-child { border-bottom: none; }
+  .kv b { font-variant-numeric: tabular-nums; }
+  .temp { color: #B03427; } .humi { color: #2E6DA4; }
+  canvas { width: 100%; height: 260px; display: block; }
+  .legend { display: flex; gap: 18px; font-size: 12px; color: #8A7D63; margin-top: 8px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  #alarmList { list-style: none; max-height: 210px; overflow-y: auto; }
+  #alarmList li { font-size: 13px; color: #B03427; padding: 7px 0; border-bottom: 1px dashed #EDE6D6; }
+  #alarmList li span { color: #8A7D63; margin-left: 8px; }
+  .empty { color: #B3A78E; font-size: 13px; padding: 8px 0; }
+  .btn { background: #C0392B; color: #fff; border: none; border-radius: 6px; padding: 10px 20px;
+         font-size: 14px; cursor: pointer; margin-top: 14px; width: 100%; }
+  .btn:hover { background: #A52E21; }
+  .foot { margin-top: 22px; font-size: 12px; color: #B3A78E; line-height: 1.7; }
+  .badge { display:inline-block; background:#1F1B16; color:#FAF6EF; font-size:12px;
+           padding: 3px 10px; border-radius: 4px; margin-left: 10px; vertical-align: 2px; }
+</style>
+</head>
+<body>
+  <h1>4G 火焰报警装置 · 现场看板<span class="badge" id="mode">simulator</span></h1>
+  <div class="sub">
+    见火即报 · KY-026 高有效实测 · 60 秒告警节流 · 数据每 2 秒刷新
+  </div>
+
+  <div class="grid">
+    <div>
+      <div class="card fire-box">
+        <div class="fire-dot" id="fireDot"></div>
+        <div class="fire-txt" id="fireTxt">—</div>
+      </div>
+      <div class="card" style="margin-top:18px">
+        <h2>实时读数</h2>
+        <div class="kv"><span>温度</span><b class="temp" id="temp">—</b></div>
+        <div class="kv"><span>湿度</span><b class="humi" id="humi">—</b></div>
+        <div class="kv"><span>采样帧数</span><b id="samples">0</b></div>
+        <div class="kv"><span>火焰帧数</span><b id="fireFrames">0</b></div>
+        <div class="kv"><span>最后更新</span><b id="ts" style="font-size:13px">—</b></div>
+        <button class="btn" id="igniteBtn">🔥 模拟点火（录屏用）</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>最近 40 帧 · 温湿度曲线（火焰帧红点标注）</h2>
+      <canvas id="chart" width="760" height="260"></canvas>
+      <div class="legend">
+        <span><i style="background:#B03427"></i>温度 ℃</span>
+        <span><i style="background:#2E6DA4"></i>湿度 %</span>
+        <span><i style="background:#C0392B;border-radius:50%"></i>火焰帧</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>告警记录（60s 节流后）</h2>
+      <ul id="alarmList"></ul>
+      <div class="empty" id="alarmEmpty">暂无告警——点火后这里会立刻出现一条</div>
+      <div class="foot">
+        口径声明：本页数据由云端模拟器按真实节拍出数（2s/帧），
+        阈值、节流与告警联动逻辑与真机固件同一份实现；
+        设备接入后走 MQTT → /api/ingest，链路不变。
+      </div>
+    </div>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+function drawChart(series) {
+  const cv = $('chart'), ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height, P = 34;
+  ctx.clearRect(0, 0, W, H);
+  if (!series.length) return;
+  const temps = series.map(s => s.temp_c), humis = series.map(s => s.humi_pct);
+  const lo = Math.min(...temps, ...humis) - 2, hi = Math.max(...temps, ...humis) + 2;
+  const x = i => P + i * (W - 2 * P) / Math.max(1, series.length - 1);
+  const y = v => H - P - (v - lo) * (H - 2 * P) / (hi - lo);
+  ctx.strokeStyle = '#EDE6D6'; ctx.lineWidth = 1;
+  for (let g = 0; g <= 4; g++) {
+    const gy = P + g * (H - 2 * P) / 4;
+    ctx.beginPath(); ctx.moveTo(P, gy); ctx.lineTo(W - P, gy); ctx.stroke();
+  }
+  function line(arr, color) {
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
+    arr.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)));
+    ctx.stroke();
+  }
+  line(temps, '#B03427'); line(humis, '#2E6DA4');
+  ctx.fillStyle = '#C0392B';
+  series.forEach((s, i) => { if (s.fire) { ctx.beginPath(); ctx.arc(x(i), y(s.temp_c), 4, 0, 7); ctx.fill(); } });
+}
+async function tick() {
+  try {
+    const r = await (await fetch('/api/now')).json();
+    $('mode').textContent = r.mode;
+    const n = r.now;
+    if (n) {
+      const on = !!n.fire;
+      $('fireDot').classList.toggle('on', on);
+      $('fireTxt').innerHTML = on ? '🔥 火焰告警<small>见火即报 · fire = ' + r.fire_active_level + '（高有效）</small>'
+                                  : '正常<small>无火焰 · 巡检中</small>';
+      $('temp').textContent = n.temp_c + ' ℃';
+      $('humi').textContent = n.humi_pct + ' %';
+      $('ts').textContent = n.ts;
+      drawChart(r.series);
+    }
+    $('samples').textContent = r.samples;
+    $('fireFrames').textContent = r.fire_frames;
+    const al = await (await fetch('/api/alarms')).json();
+    $('alarmEmpty').style.display = al.length ? 'none' : 'block';
+    $('alarmList').innerHTML = al.map(a =>
+      '<li>检测到火焰，请立即处理！<span>' + a.ts + '</span></li>').join('');
+  } catch (e) { /* 网络抖动，下一拍重试 */ }
+}
+$('igniteBtn').onclick = async () => {
+  await fetch('/api/ignite?seconds=5', { method: 'POST' });
+  $('igniteBtn').textContent = '已点火，看板 2 秒内响应…';
+  setTimeout(() => $('igniteBtn').textContent = '🔥 模拟点火（录屏用）', 4000);
+  tick();
+};
+tick(); setInterval(tick, 2000);
+</script>
+</body>
+</html>
