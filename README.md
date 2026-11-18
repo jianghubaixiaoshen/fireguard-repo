@@ -41,7 +41,7 @@ AHT20(I2C1,0x38)  → 温湿度        ┴→ QuecPython 主循环 → 60s 告�
 ```bash
 cd cloud
 MOCK=1 PORT=8100 python -m uvicorn app:app --port 8100
-# 浏览器打开 http://<服务器>:8100
+# 浏览器打开 http://<服务器>:8100（火山云演示机已挂 nginx 根路径：http://163.7.11.61 直达）
 # 点火（录屏用）：
 curl -X POST "http://<服务器>:8100/api/ignite?seconds=5"
 ```
